@@ -72,18 +72,14 @@ func (chain *AggregatedChain[D, A]) Close() {
 }
 
 func (chain *AggregatedChain[D, A]) Sync() error {
-	dataLength, err := chain.dataChain.Length()
-	if err != nil {
-		return err
-	}
+	var err error
+
+	dataLength := chain.dataChain.Length()
 
 	deeperLen := dataLength
 	shiftBits := levelBits
 	for level, aggChain := range chain.aggregationChains {
-		length, err := aggChain.Length()
-		if err != nil {
-			return err
-		}
+		length := aggChain.Length()
 		availableLen := deeperLen >> levelBits
 		if length > availableLen {
 			return errors.New("inconsistent aggregation level lengths")

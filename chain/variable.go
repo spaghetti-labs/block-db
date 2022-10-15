@@ -10,7 +10,7 @@ import (
 )
 
 type VariableBlockController[B any] struct {
-	Size      func(block *B) uint
+	Size      func(block *B) uint64
 	Marshal   func(block *B, buffer *buffer.Buffer)
 	Unmarshal func(block *B, buffer *buffer.Buffer)
 }
@@ -32,17 +32,13 @@ var uint64Controller = FixedBlockController[uint64]{
 	},
 }
 
-func NewVariableChain[B any](controller VariableBlockController[B], dataFile *os.File, offsetFile *os.File) *VariableChain[B] {
-	chain := VariableChain[B]{
-		controller:  controller,
-		dataFile:    dataFile,
-		offsetChain: NewFixedChain(uint64Controller, offsetFile),
-	}
-	return &chain
-}
-
 func OpenVariableChain[B any](controller VariableBlockController[B], dirPath string) (*VariableChain[B], error) {
 	err := os.MkdirAll(dirPath, 0700)
+	if err != nil {
+		return nil, err
+	}
+
+	offsetChain, err := OpenFixedChain(uint64Controller, path.Join(dirPath, "offset.bin"))
 	if err != nil {
 		return nil, err
 	}
@@ -53,19 +49,17 @@ func OpenVariableChain[B any](controller VariableBlockController[B], dirPath str
 		0700,
 	)
 	if err != nil {
+		offsetChain.Close()
 		return nil, err
 	}
 
-	offsetFile, err := os.OpenFile(
-		path.Join(dirPath, "offset.bin"),
-		os.O_CREATE|os.O_RDWR,
-		0700,
-	)
-	if err != nil {
-		dataFile.Close()
-		return nil, err
+	chain := VariableChain[B]{
+		controller:  controller,
+		dataFile:    dataFile,
+		offsetChain: offsetChain,
 	}
-	return NewVariableChain(controller, dataFile, offsetFile), nil
+
+	return &chain, nil
 }
 
 func (chain *VariableChain[B]) Close() {
@@ -73,11 +67,11 @@ func (chain *VariableChain[B]) Close() {
 	chain.offsetChain.Close()
 }
 
-func (chain *VariableChain[B]) Length() (uint, error) {
+func (chain *VariableChain[B]) Length() uint64 {
 	return chain.offsetChain.Length()
 }
 
-func (chain *VariableChain[B]) readOffset(index uint) (uint64, error) {
+func (chain *VariableChain[B]) readOffset(index uint64) (uint64, error) {
 	if index == 0 {
 		return 0, nil
 	}
@@ -86,13 +80,13 @@ func (chain *VariableChain[B]) readOffset(index uint) (uint64, error) {
 	return offset, err
 }
 
-func (chain *VariableChain[B]) readEndOffset(index uint) (uint64, error) {
+func (chain *VariableChain[B]) readEndOffset(index uint64) (uint64, error) {
 	var offset uint64
 	err := chain.offsetChain.ReadBlock(index, &offset)
 	return offset, err
 }
 
-func (chain *VariableChain[B]) readOffsets(index uint, count uint) (startOffset uint64, endOffset uint64, err error) {
+func (chain *VariableChain[B]) readOffsets(index uint64, count uint64) (startOffset uint64, endOffset uint64, err error) {
 	if count == 0 {
 		err = errors.New("count must be > 0")
 		return
@@ -118,7 +112,7 @@ func (chain *VariableChain[B]) readOffsets(index uint, count uint) (startOffset 
 	return
 }
 
-func (chain *VariableChain[B]) WriteBlocks(index uint, blocks []B) error {
+func (chain *VariableChain[B]) WriteBlocks(index uint64, blocks []B) error {
 	chain.mutex.Lock()
 	defer chain.mutex.Unlock()
 
@@ -129,7 +123,7 @@ func (chain *VariableChain[B]) WriteBlocks(index uint, blocks []B) error {
 
 	count := uint(len(blocks))
 
-	var totalSize uint
+	var totalSize uint64
 	endOffsets := make([]uint64, count)
 	for i := range blocks {
 		totalSize += chain.controller.Size(&blocks[i])
@@ -153,11 +147,11 @@ func (chain *VariableChain[B]) WriteBlocks(index uint, blocks []B) error {
 	return err
 }
 
-func (chain *VariableChain[B]) ReadBlocks(index uint, blocks []B) error {
+func (chain *VariableChain[B]) ReadBlocks(index uint64, blocks []B) error {
 	chain.mutex.Lock()
 	defer chain.mutex.Unlock()
 
-	count := uint(len(blocks))
+	count := uint64(len(blocks))
 
 	startOffset, endOffset, err := chain.readOffsets(index, count)
 	if err != nil {
@@ -183,7 +177,7 @@ func (chain *VariableChain[B]) ReadBlocks(index uint, blocks []B) error {
 	return nil
 }
 
-func (chain *VariableChain[B]) ReadBlock(index uint, block *B) error {
+func (chain *VariableChain[B]) ReadBlock(index uint64, block *B) error {
 	chain.mutex.Lock()
 	defer chain.mutex.Unlock()
 

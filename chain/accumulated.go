@@ -52,15 +52,11 @@ func (chain *AccumulatedChain[D, C]) Close() {
 }
 
 func (chain *AccumulatedChain[D, C]) Sync() error {
-	dataLength, err := chain.dataChain.Length()
-	if err != nil {
-		return err
-	}
+	var err error
 
-	length, err := chain.cumulativeChain.Length()
-	if err != nil {
-		return err
-	}
+	dataLength := chain.dataChain.Length()
+
+	length := chain.cumulativeChain.Length()
 
 	if dataLength < length {
 		return errors.New("inconsistent chain lengths")
@@ -80,8 +76,8 @@ func (chain *AccumulatedChain[D, C]) Sync() error {
 		}
 	}
 
-	const maxBatchSize = uint(32768)
-	var buffSize uint
+	const maxBatchSize = uint64(32768)
+	var buffSize uint64
 	if diffLength > maxBatchSize {
 		buffSize = maxBatchSize
 	} else {
@@ -91,8 +87,8 @@ func (chain *AccumulatedChain[D, C]) Sync() error {
 	data := make([]D, buffSize)
 	cums := make([]C, buffSize)
 
-	for i := uint(0); i < diffLength; {
-		var batchSize uint
+	for i := uint64(0); i < diffLength; {
+		var batchSize uint64
 		remaining := diffLength - i
 		if remaining > maxBatchSize {
 			batchSize = maxBatchSize
@@ -122,7 +118,7 @@ func (chain *AccumulatedChain[D, C]) Sync() error {
 	return nil
 }
 
-func (chain *AccumulatedChain[D, C]) Accumulate(index uint, length uint, result *C) error {
+func (chain *AccumulatedChain[D, C]) Accumulate(index uint64, length uint64, result *C) error {
 	if length == 0 {
 		return errors.New("zero length accumulation")
 	}
