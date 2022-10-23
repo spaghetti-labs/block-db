@@ -2,38 +2,38 @@ package chain
 
 import "errors"
 
-type Accumulator[D any, C any] struct {
-	Accumulate func(carry *C, data []D, results []C)
-	Difference func(from *C, to *C, result *C)
+type Accumulator[D any, E any, C any] struct {
+	Edge       func(carry *E, data []D, edges []E)
+	Accumulate func(from *E, to *E, cumulative *C)
 }
 
-type AccumulatedChain[D any, C any] struct {
-	dataChain       Chain[D]
-	accumulator     Accumulator[D, C]
-	cumulativeChain *FixedChain[C]
+type AccumulatedChain[D any, E any, C any] struct {
+	dataChain   Chain[D]
+	accumulator Accumulator[D, E, C]
+	edgeChain   *FixedChain[E]
 }
 
-func NewAccumulatedChain[D any, C any](
+func NewAccumulatedChain[D any, E any, C any](
 	dataChain Chain[D],
-	accumulator Accumulator[D, C],
-	cumulativeChain *FixedChain[C],
-) *AccumulatedChain[D, C] {
-	chain := AccumulatedChain[D, C]{
-		dataChain:       dataChain,
-		accumulator:     accumulator,
-		cumulativeChain: cumulativeChain,
+	accumulator Accumulator[D, E, C],
+	edgeChain *FixedChain[E],
+) *AccumulatedChain[D, E, C] {
+	chain := AccumulatedChain[D, E, C]{
+		dataChain:   dataChain,
+		accumulator: accumulator,
+		edgeChain:   edgeChain,
 	}
 	return &chain
 }
 
-func OpenAccumulatedChain[D any, C any](
+func OpenAccumulatedChain[D any, E any, C any](
 	dataChain Chain[D],
-	cumulativeController FixedBlockController[C],
-	accumulator Accumulator[D, C],
+	edgeController FixedBlockController[E],
+	accumulator Accumulator[D, E, C],
 	filePath string,
-) (*AccumulatedChain[D, C], error) {
-	cumulativeChain, err := OpenFixedChain(
-		cumulativeController,
+) (*AccumulatedChain[D, E, C], error) {
+	edgeChain, err := OpenFixedChain(
+		edgeController,
 		filePath,
 	)
 	if err != nil {
@@ -43,20 +43,20 @@ func OpenAccumulatedChain[D any, C any](
 	return NewAccumulatedChain(
 		dataChain,
 		accumulator,
-		cumulativeChain,
+		edgeChain,
 	), nil
 }
 
-func (chain *AccumulatedChain[D, C]) Close() {
-	chain.cumulativeChain.Close()
+func (chain *AccumulatedChain[D, E, C]) Close() {
+	chain.edgeChain.Close()
 }
 
-func (chain *AccumulatedChain[D, C]) Sync() error {
+func (chain *AccumulatedChain[D, E, C]) Sync() error {
 	var err error
 
 	dataLength := chain.dataChain.Length()
 
-	length := chain.cumulativeChain.Length()
+	length := chain.edgeChain.Length()
 
 	if dataLength < length {
 		return errors.New("inconsistent chain lengths")
@@ -67,10 +67,10 @@ func (chain *AccumulatedChain[D, C]) Sync() error {
 		return nil
 	}
 
-	var carry *C
+	var carry *E
 	if length > 0 {
-		carry = new(C)
-		err = chain.cumulativeChain.ReadBlock(length-1, carry)
+		carry = new(E)
+		err = chain.edgeChain.ReadBlock(length-1, carry)
 		if err != nil {
 			return err
 		}
@@ -85,7 +85,7 @@ func (chain *AccumulatedChain[D, C]) Sync() error {
 	}
 
 	data := make([]D, buffSize)
-	cums := make([]C, buffSize)
+	edges := make([]E, buffSize)
 
 	for i := uint64(0); i < diffLength; {
 		var batchSize uint64
@@ -103,14 +103,14 @@ func (chain *AccumulatedChain[D, C]) Sync() error {
 			return err
 		}
 
-		chain.accumulator.Accumulate(carry, data[:batchSize], cums[:batchSize])
+		chain.accumulator.Edge(carry, data[:batchSize], edges[:batchSize])
 
-		err = chain.cumulativeChain.WriteBlocks(index, cums[:batchSize])
+		err = chain.edgeChain.WriteBlocks(index, edges[:batchSize])
 		if err != nil {
 			return err
 		}
 
-		carryVal := cums[batchSize-1]
+		carryVal := edges[batchSize-1]
 		carry = &carryVal
 		i += batchSize
 	}
@@ -118,28 +118,46 @@ func (chain *AccumulatedChain[D, C]) Sync() error {
 	return nil
 }
 
-func (chain *AccumulatedChain[D, C]) Accumulate(index uint64, length uint64, result *C) error {
-	if length == 0 {
-		return errors.New("zero length accumulation")
+func (chain *AccumulatedChain[D, E, C]) ReadEdgeSeries(indices []uint64, edges []E, cumulatives []C) error {
+	length := len(indices)
+
+	if length < 2 {
+		return errors.New("accumulation series must have at least 2 indices")
 	}
 
-	var tail C
-	err := chain.cumulativeChain.ReadBlock(index+length-1, &tail)
+	if length != len(edges) {
+		return errors.New("edges length must be equal to indices length")
+	}
+
+	if length-1 != len(cumulatives) {
+		return errors.New("cumulatives length must be 1 less than indices length")
+	}
+
+	for i := 0; i < length; i++ {
+		index := indices[i]
+		if i > 0 && index <= indices[i-1] {
+			return errors.New("indices must be in ascending order")
+		}
+		err := chain.edgeChain.ReadBlock(index, &edges[i])
+		if err != nil {
+			return err
+		}
+	}
+
+	for i := 0; i < length-1; i++ {
+		from := &edges[i]
+		to := &edges[i+1]
+		chain.accumulator.Accumulate(from, to, &cumulatives[i])
+	}
+
+	return nil
+}
+
+func (chain *AccumulatedChain[D, E, C]) ReadEdge(index uint64, result *E) error {
+	err := chain.edgeChain.ReadBlock(index, result)
 	if err != nil {
 		return err
 	}
 
-	if index == 0 {
-		*result = tail
-		return nil
-	}
-
-	var head C
-	err = chain.cumulativeChain.ReadBlock(index-1, &head)
-	if err != nil {
-		return err
-	}
-
-	chain.accumulator.Difference(&head, &tail, result)
 	return nil
 }
