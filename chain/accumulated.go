@@ -51,6 +51,10 @@ func (chain *AccumulatedChain[D, E, C]) Close() {
 	chain.edgeChain.Close()
 }
 
+func (chain *AccumulatedChain[D, E, C]) Length() uint64 {
+	return chain.edgeChain.Length()
+}
+
 func (chain *AccumulatedChain[D, E, C]) Sync() error {
 	var err error
 
